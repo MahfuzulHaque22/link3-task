@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'package:permission_handler/permission_handler.dart';
 
 class ToDoListScreen extends StatefulWidget {
   @override
@@ -19,12 +20,14 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
   String _username = 'User';
   String _searchQuery = '';
   bool _isSearching = false; // State variable for search visibility
-
   @override
   void initState() {
     super.initState();
     _initializeNotifications();
     _loadData();
+    _checkDueDates(); // Check due dates on initialization
+    // Test Notification
+    _showNotification("Test notification to check if notifications are working!");
   }
 
   Future<void> _loadData() async {
@@ -59,32 +62,55 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
     await prefs.setString('username', newName);
   }
 
-  void _initializeNotifications() {
+  void _initializeNotifications() async {
     _notificationsPlugin = FlutterLocalNotificationsPlugin();
+
     const AndroidInitializationSettings initializationSettingsAndroid =
-    AndroidInitializationSettings('app_icon');
+    AndroidInitializationSettings('@mipmap/ic_launcher'); // Use the default launcher icon
+
     const InitializationSettings initializationSettings =
     InitializationSettings(android: initializationSettingsAndroid);
-    _notificationsPlugin.initialize(initializationSettings);
+
+    await _notificationsPlugin.initialize(initializationSettings);
   }
 
-  void _showNotification(String title) {
+  Future<void> _showNotification(String taskTitle) async {
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
     AndroidNotificationDetails(
-      'your_channel_id',
-      'your_channel_name',
-      importance: Importance.max,
-      priority: Priority.high,
-    );
+        'your_channel_id',
+        'your_channel_name',
+        channelDescription: 'your_channel_description',
+        importance: Importance.max,
+        priority: Priority.high,
+        showWhen: false,
+        icon: '@mipmap/ic_launcher'); // Reference to default icon
+
     const NotificationDetails platformChannelSpecifics =
     NotificationDetails(android: androidPlatformChannelSpecifics);
-    _notificationsPlugin.show(
-      0,
-      'Task Due Today',
-      title,
-      platformChannelSpecifics,
-    );
+
+    await _notificationsPlugin.show(
+        0, // Notification ID
+        'Task Completed', // Title
+        taskTitle, // Body
+        platformChannelSpecifics);
   }
+
+  Future<void> _requestNotificationPermission() async {
+    var status = await Permission.notification.status;
+    if (!status.isGranted) {
+      await Permission.notification.request();
+    }
+  }
+
+  Future<void> _scheduleDueDateNotification(DateTime dueDate, String title) async {
+    var scheduledDate = DateTime.now();
+    if (dueDate.year == scheduledDate.year &&
+        dueDate.month == scheduledDate.month &&
+        dueDate.day == scheduledDate.day) {
+      _showNotification(title); // Directly call if the due date is today
+    }
+  }
+
 
   void _addTask() {
     if (_titleController.text.isEmpty || _dueDate == null) return;
@@ -97,9 +123,21 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
       });
     });
     _saveTasks();
+
+    // Check if the due date is today and show notification
+    DateTime now = DateTime.now();
+    if (_dueDate!.year == now.year && _dueDate!.month == now.month && _dueDate!.day == now.day) {
+      _showNotification('Task Due Today: ${_titleController.text}'); // Show notification for due date today
+    }
+
+    // Clear the controllers and due date
     _titleController.clear();
     _detailsController.clear();
     _dueDate = null;
+
+    // Log the task title to confirm it was added
+    print('Task Created: ${_titleController.text}');
+    _showNotification('Task Created: ${_titleController.text}'); // Show notification for task creation
   }
 
   void _toggleCompletion(int index) {
@@ -107,6 +145,11 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
       _tasks[index]['completed'] = !_tasks[index]['completed'];
     });
     _saveTasks();
+    if (_tasks[index]['completed']) {
+      // Log completion
+      print('Task Completed: ${_tasks[index]['title']}');
+      _showNotification('Task Completed: ${_tasks[index]['title']}'); // Show notification for task completion
+    }
   }
 
   void _removeTask(int index) async {
@@ -128,10 +171,22 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
       ),
     );
     if (confirm) {
+      print('Task Deleted: ${_tasks[index]['title']}'); // Log deletion
+      _showNotification('Task Deleted: ${_tasks[index]['title']}'); // Show notification for task deletion
       setState(() {
         _tasks.removeAt(index);
       });
       _saveTasks();
+    }
+  }
+
+  void _checkDueDates() {
+    DateTime now = DateTime.now();
+    for (var task in _tasks) {
+      if (!task['completed'] && task['dueDate'].isAtSameMomentAs(DateTime(now.year, now.month, now.day))) {
+        print('Notifying for task: ${task['title']}'); // Debugging statement
+        _showNotification('Task Due Today: ${task['title']}');
+      }
     }
   }
 
@@ -148,6 +203,8 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
       });
     }
   }
+
+
 
   void _showRenameDialog() {
     _renameController.text = _username;
@@ -367,6 +424,8 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
                 itemCount: filteredTasks.length,
                 itemBuilder: (context, index) {
                   final task = filteredTasks[index];
+                  bool isToday = task['dueDate'].isAtSameMomentAs(DateTime.now());
+
                   return ListTile(
                     leading: Checkbox(
                       value: task['completed'],
@@ -375,13 +434,30 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
                     ),
                     title: Padding(
                       padding: const EdgeInsets.only(bottom: 8.0),
-                      child: Text(task['title'], style: TextStyle(color: Colors.grey[800])),
+                      child: Text(
+                        task['title'],
+                        style: TextStyle(color: Colors.grey[800]),
+                      ),
                     ),
-                    subtitle: Row(
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.calendar_month_rounded, color: Colors.grey, size: 18), // Icon for due date
-                        const SizedBox(width: 8), // Space between icon and text
-                        Text(DateFormat.yMd().format(task['dueDate']), style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        Row(
+                          children: [
+                            const Icon(Icons.calendar_month_rounded, color: Colors.grey, size: 18), // Icon for due date
+                            const SizedBox(width: 8), // Space between icon and text
+                            Text(
+                              DateFormat.yMd().format(task['dueDate']),
+                              style: const TextStyle(fontSize: 11, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                        // Show message if due date is today
+                        if (isToday)
+                          const Text(
+                            'Today is the last date of this task',
+                            style: TextStyle(fontSize: 11, color: Colors.redAccent),
+                          ),
                       ],
                     ),
                     trailing: Row(
@@ -401,6 +477,7 @@ class _ToDoListScreenState extends State<ToDoListScreen> {
                 },
               ),
             ),
+
           ],
         ),
       ),
